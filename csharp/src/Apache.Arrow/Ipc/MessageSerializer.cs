@@ -18,6 +18,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 
+using Flatbuf = org.apache.arrow.flatbuf;
+
 namespace Apache.Arrow.Ipc
 {
     internal class MessageSerializer
@@ -55,19 +57,22 @@ namespace Apache.Arrow.Ipc
         internal static Schema GetSchema(Flatbuf.Schema schema)
         {
             List<Field> fields = new List<Field>();
-            for (int i = 0; i < schema.FieldsLength; i++)
+            for (int i = 0; i < schema.fields.Count; i++)
             {
-                Flatbuf.Field field = schema.Fields(i).GetValueOrDefault();
+                Flatbuf.Field field = schema.fields[i];
 
                 fields.Add(FieldFromFlatbuffer(field));
             }
 
-            Dictionary<string, string> metadata = schema.CustomMetadataLength > 0 ? new Dictionary<string, string>() : null;
-            for (int i = 0; i < schema.CustomMetadataLength; i++)
+            Dictionary<string, string> metadata = null;
+            int? metadataCount = schema.custom_metadata?.Count;
+            if (metadataCount > 0)
             {
-                Flatbuf.KeyValue keyValue = schema.CustomMetadata(i).GetValueOrDefault();
-
-                metadata[keyValue.Key] = keyValue.Value;
+                metadata = new Dictionary<string, string>(metadataCount.Value);
+                foreach (Flatbuf.KeyValue keyValue in schema.custom_metadata)
+                {
+                    metadata[keyValue.key] = keyValue.value;
+                }
             }
 
             return new Schema(fields, metadata, copyCollections: false);
@@ -75,34 +80,42 @@ namespace Apache.Arrow.Ipc
 
         private static Field FieldFromFlatbuffer(Flatbuf.Field flatbufField)
         {
-            Field[] childFields = flatbufField.ChildrenLength > 0 ? new Field[flatbufField.ChildrenLength] : null;
-            for (int i = 0; i < flatbufField.ChildrenLength; i++)
+            IList<Flatbuf.Field> fbChildFields = flatbufField.children;
+            Field[] childFields = null;
+
+            if (fbChildFields != null)
             {
-                Flatbuf.Field? childFlatbufField = flatbufField.Children(i);
-                childFields[i] = FieldFromFlatbuffer(childFlatbufField.Value);
+                childFields = new Field[fbChildFields.Count];
+
+                for (int i = 0; i < childFields.Length; i++)
+                {
+                    Flatbuf.Field childFlatbufField = fbChildFields[i];
+                    childFields[i] = FieldFromFlatbuffer(childFlatbufField);
+                }
             }
 
-            Dictionary<string, string> metadata = flatbufField.CustomMetadataLength > 0 ? new Dictionary<string, string>() : null;
-            for (int i = 0; i < flatbufField.CustomMetadataLength; i++)
+            Dictionary<string, string> metadata = null;
+            IList<Flatbuf.KeyValue> fbCustomMetadata = flatbufField.custom_metadata;
+            if (fbCustomMetadata != null)
             {
-                Flatbuf.KeyValue keyValue = flatbufField.CustomMetadata(i).GetValueOrDefault();
-
-                metadata[keyValue.Key] = keyValue.Value;
+                foreach (Flatbuf.KeyValue keyValue in fbCustomMetadata)
+                {
+                    metadata[keyValue.key] = keyValue.value;
+                }
             }
 
-            return new Field(flatbufField.Name, GetFieldArrowType(flatbufField, childFields), flatbufField.Nullable, metadata, copyCollections: false);
+            return new Field(flatbufField.name, GetFieldArrowType(flatbufField, childFields), flatbufField.nullable, metadata, copyCollections: false);
         }
 
-        private static Types.IArrowType GetFieldArrowType(Flatbuf.Field field, Field[] childFields = null)
+        private static Types.IArrowType GetFieldArrowType(
+            Flatbuf.Field field,
+            Field[] childFields = null)
         {
-            switch (field.TypeType)
-            {
-                case Flatbuf.Type.Int:
-                    Flatbuf.Int intMetaData = field.Type<Flatbuf.Int>().Value;
-                    return MessageSerializer.GetNumberType(intMetaData.BitWidth, intMetaData.IsSigned);
-                case Flatbuf.Type.FloatingPoint:
-                    Flatbuf.FloatingPoint floatingPointTypeMetadata = field.Type<Flatbuf.FloatingPoint>().Value;
-                    switch (floatingPointTypeMetadata.Precision)
+            return field.type.Switch<Types.IArrowType>(
+                caseInt: v => MessageSerializer.GetNumberType(v.bitWidth, v.isSigned),
+                caseFloatingPoint: new Func<Flatbuf.FloatingPoint, Types.IArrowType>(v =>
+                {
+                    switch (v.precision)
                     {
                         case Flatbuf.Precision.SINGLE:
                             return Types.FloatType.Default;
@@ -113,22 +126,23 @@ namespace Apache.Arrow.Ipc
                         default:
                             throw new InvalidDataException("Unsupported floating point precision");
                     }
-                case Flatbuf.Type.Bool:
-                    return new Types.BooleanType();
-                case Flatbuf.Type.Decimal:
-                    Flatbuf.Decimal decMeta = field.Type<Flatbuf.Decimal>().Value;
-                    switch (decMeta.BitWidth)
+                }),
+                caseBool: v => new Types.BooleanType(),
+                caseDecimal: new Func<Flatbuf.Decimal, Types.IArrowType>(v =>
+                {
+                    switch (v.bitWidth)
                     {
                         case 128:
-                            return new Types.Decimal128Type(decMeta.Precision, decMeta.Scale);
+                            return new Types.Decimal128Type(v.precision, v.scale);
                         case 256:
-                            return new Types.Decimal256Type(decMeta.Precision, decMeta.Scale);
+                            return new Types.Decimal256Type(v.precision, v.scale);
                         default:
-                            throw new InvalidDataException("Unsupported decimal bit width " + decMeta.BitWidth);
+                            throw new InvalidDataException("Unsupported decimal bit width " + v.bitWidth);
                     }
-                case Flatbuf.Type.Date:
-                    Flatbuf.Date dateMeta = field.Type<Flatbuf.Date>().Value;
-                    switch (dateMeta.Unit)
+                }),
+                caseDate: new Func<Flatbuf.Date, Types.IArrowType>(v =>
+                {
+                    switch (v.unit)
                     {
                         case Flatbuf.DateUnit.DAY:
                             return Types.Date32Type.Default;
@@ -137,41 +151,43 @@ namespace Apache.Arrow.Ipc
                         default:
                             throw new InvalidDataException("Unsupported date unit");
                     }
-                case Flatbuf.Type.Time:
-                    Flatbuf.Time timeMeta = field.Type<Flatbuf.Time>().Value;
-                    switch (timeMeta.BitWidth)
+                }),
+                caseTime: new Func<Flatbuf.Time, Types.IArrowType>(v =>
+                {
+                    switch (v.bitWidth)
                     {
                         case 32:
-                            return new Types.Time32Type(timeMeta.Unit.ToArrow());
+                            return new Types.Time32Type(v.unit.ToArrow());
                         case 64:
-                            return new Types.Time64Type(timeMeta.Unit.ToArrow());
+                            return new Types.Time64Type(v.unit.ToArrow());
                         default:
                             throw new InvalidDataException("Unsupported time bit width");
                     }
-                case Flatbuf.Type.Timestamp:
-                    Flatbuf.Timestamp timestampTypeMetadata = field.Type<Flatbuf.Timestamp>().Value;
-                    Types.TimeUnit unit = timestampTypeMetadata.Unit.ToArrow();
-                    string timezone = timestampTypeMetadata.Timezone;
+                }),
+                caseTimestamp: v =>
+                {
+                    Types.TimeUnit unit = v.unit.ToArrow();
+                    string timezone = v.timezone;
                     return new Types.TimestampType(unit, timezone);
-                case Flatbuf.Type.Interval:
-                    Flatbuf.Interval intervalMetadata = field.Type<Flatbuf.Interval>().Value;
-                    return new Types.IntervalType(intervalMetadata.Unit.ToArrow());
-                case Flatbuf.Type.Utf8:
-                    return new Types.StringType();
-                case Flatbuf.Type.Binary:
-                    return Types.BinaryType.Default;
-                case Flatbuf.Type.List:
+                },
+                caseInterval: v => new Types.IntervalType(v.unit.ToArrow()),
+                caseUtf8: v => new Types.StringType(),
+                caseBinary: v => Types.BinaryType.Default,
+                caseList: v =>
+                {
                     if (childFields == null || childFields.Length != 1)
                     {
                         throw new InvalidDataException($"List type must have exactly one child.");
                     }
                     return new Types.ListType(childFields[0]);
-                case Flatbuf.Type.Struct_:
+                },
+                caseStruct_: v =>
+                {
                     Debug.Assert(childFields != null);
                     return new Types.StructType(childFields);
-                default:
-                    throw new InvalidDataException($"Arrow primitive '{field.TypeType}' is unsupported.");
-            }
+                },
+                caseDefault: () => throw new InvalidDataException($"Arrow primitive '{field.TypeType}' is unsupported.")
+            );
         }
     }
 }

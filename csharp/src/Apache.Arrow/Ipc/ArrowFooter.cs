@@ -16,6 +16,7 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using Flatbuf = org.apache.arrow.flatbuf;
 
 namespace Apache.Arrow.Ipc
 {
@@ -62,32 +63,38 @@ namespace Apache.Arrow.Ipc
         }
 
         public ArrowFooter(Flatbuf.Footer footer)
-            : this(Ipc.MessageSerializer.GetSchema(footer.Schema.GetValueOrDefault()), GetDictionaries(footer),
+            : this(Ipc.MessageSerializer.GetSchema(footer.schema), GetDictionaries(footer),
                 GetRecordBatches(footer))
         { }
 
         private static IEnumerable<Block> GetDictionaries(Flatbuf.Footer footer)
         {
-            for (int i = 0; i < footer.DictionariesLength; i++)
-            {
-                Flatbuf.Block? block = footer.Dictionaries(i);
+            IList<Flatbuf.Block> dictionaries = footer.dictionaries;
+            int count = dictionaries.Count;
 
-                if (block.HasValue)
+            for (int i = 0; i < count; i++)
+            {
+                Flatbuf.Block block = dictionaries[i];
+
+                if (block != null)
                 {
-                    yield return new Block(block.Value);
+                    yield return new Block(block);
                 }
             }
         }
 
         private static IEnumerable<Block> GetRecordBatches(Flatbuf.Footer footer)
         {
-            for (int i = 0; i < footer.RecordBatchesLength; i++)
-            {
-                Flatbuf.Block? block = footer.RecordBatches(i);
+            IList<Flatbuf.Block> batches = footer.recordBatches;
+            int batchCount = batches.Count;
 
-                if (block.HasValue)
+            for (int i = 0; i < batchCount; i++)
+            {
+                Flatbuf.Block block = batches[i];
+
+                if (block != null)
                 {
-                    yield return new Block(block.Value);
+                    yield return new Block(block);
                 }
             }
         }

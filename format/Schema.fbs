@@ -389,7 +389,7 @@ struct Buffer {
 /// ----------------------------------------------------------------------
 /// A Schema describes the columns in a row batch
 
-table Schema {
+table Schema (fs_serializer:"Lazy") {
 
   /// endianness of the buffer
   /// it is Little Endian by default
@@ -403,5 +403,3 @@ table Schema {
   /// Features used in the stream/file.
   features : [ Feature ];
 }
-
-root_type Schema;

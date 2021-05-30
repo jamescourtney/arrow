@@ -14,6 +14,7 @@
 // limitations under the License.
 
 using System;
+using Flatbuf = org.apache.arrow.flatbuf;
 
 namespace Apache.Arrow.Ipc
 {
@@ -32,9 +33,9 @@ namespace Apache.Arrow.Ipc
 
         public Block(Flatbuf.Block block)
         {
-            Offset = block.Offset;
-            BodyLength = block.BodyLength;
-            MetadataLength = block.MetaDataLength;
+            Offset = block.offset;
+            BodyLength = block.bodyLength;
+            MetadataLength = block.metaDataLength;
         }
     }
 }

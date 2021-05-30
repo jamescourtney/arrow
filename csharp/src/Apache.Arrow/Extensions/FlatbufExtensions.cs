@@ -14,6 +14,7 @@
 // limitations under the License.
 
 using System;
+using Flatbuf = org.apache.arrow.flatbuf;
 
 namespace Apache.Arrow
 {
@@ -21,9 +22,15 @@ namespace Apache.Arrow
     {
         public static bool IsFixedPrimitive(this Flatbuf.Type t)
         {
-            if (t == Flatbuf.Type.Utf8 || t == Flatbuf.Type.Binary)
-                return false;
-            return true;
+            switch (t.Kind)
+            {
+                case Flatbuf.Type.ItemKind.Binary:
+                case Flatbuf.Type.ItemKind.Utf8:
+                    return false;
+
+                default:
+                    return true;
+            }
         }
 
         public static bool IsFixedPrimitive(this Types.IArrowType t)
